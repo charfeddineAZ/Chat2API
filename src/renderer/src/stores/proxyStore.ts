@@ -170,6 +170,7 @@ export const useProxyStore = create<ProxyState>((set, get) => ({
         set({
           appConfig: config,
           loadBalanceStrategy: config.loadBalanceStrategy,
+          accountWeights: config.accountWeights || [],
           modelMappings: Object.values(config.modelMappings || {}),
           proxyConfig: {
             ...DEFAULT_PROXY_CONFIG,
@@ -195,6 +196,15 @@ export const useProxyStore = create<ProxyState>((set, get) => ({
       
       // Deep merge for nested objects like toolCallingConfig and sessionConfig
       let newConfig = { ...currentConfig, ...config } as AppConfig
+      if (config.accountWeights) {
+        newConfig.accountWeights = config.accountWeights
+      }
+      if (config.accountSelectionConfig) {
+        newConfig.accountSelectionConfig = {
+          ...currentConfig.accountSelectionConfig,
+          ...config.accountSelectionConfig,
+        }
+      }
       
       // Handle toolCallingConfig deep merge
       if (config.toolCallingConfig && currentConfig?.toolCallingConfig) {

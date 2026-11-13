@@ -19,6 +19,7 @@ import { QwenAdapter, QwenStreamHandler } from './adapters/qwen'
 import { QwenAiAdapter, QwenAiStreamHandler } from './adapters/qwen-ai'
 import { ZaiAdapter, ZaiStreamHandler } from './adapters/zai'
 import { MiniMaxAdapter, MiniMaxStreamHandler } from './adapters/minimax'
+import { AnthropicAdapter, AnthropicStreamHandler } from './adapters/anthropic'
 import { PerplexityAdapter } from './adapters/perplexity'
 import { PerplexityStreamHandler } from './adapters/perplexity-stream'
 import { ToolCallingEngine } from './toolCalling/ToolCallingEngine'
@@ -104,6 +105,12 @@ export class RequestForwarder {
       matches: MimoAdapter.isMimoProvider,
       forward: (request, account, provider, actualModel, startTime) =>
         this.forwardMimo(request, account, provider, actualModel, startTime),
+    },
+    {
+      name: 'anthropic',
+      matches: AnthropicAdapter.isAnthropicProvider,
+      forward: (request, account, provider, actualModel, startTime) =>
+        this.forwardAnthropic(request, account, provider, actualModel, startTime),
     },
     {
       name: 'perplexity',
@@ -1199,6 +1206,75 @@ export class RequestForwarder {
     } catch (error) {
       const latency = Date.now() - startTime
       console.error('[Mimo] Forward error:', error)
+      return {
+        success: false,
+        error: error instanceof Error ? error.message : 'Unknown error',
+        latency,
+      }
+    }
+  }
+
+  /**
+   * Anthropic Dedicated Forward
+   * Converts OpenAI-compatible messages into Anthropic API requests and translates responses back.
+   */
+  private async forwardAnthropic(
+    request: ChatCompletionRequest,
+    account: Account,
+    provider: Provider,
+    actualModel: string,
+    startTime: number
+  ): Promise<ForwardResult> {
+    try {
+      const transformed = this.transformRequestForPromptToolUse(request, provider)
+      const adapter = new AnthropicAdapter(provider, account)
+      const response = await adapter.chatCompletion({
+        ...request,
+        model: actualModel,
+        messages: transformed.messages,
+        tools: transformed.tools,
+      })
+
+      const latency = Date.now() - startTime
+
+      if (response.response.status >= 400) {
+        return {
+          success: false,
+          status: response.response.status,
+          error: response.response.data?.error?.message || 'Anthropic request failed',
+          latency,
+        }
+      }
+
+      if (request.stream === true) {
+        const stream = response.response.data
+        const handler = new AnthropicStreamHandler(actualModel)
+        const transformedStream = await handler.handleStream(stream)
+
+        return {
+          success: true,
+          status: response.response.status,
+          headers: this.extractHeaders(response.response.headers),
+          stream: transformedStream,
+          skipTransform: true,
+          latency,
+        }
+      }
+
+      const handler = new AnthropicStreamHandler(actualModel)
+      const body = await handler.handleNonStream(response.response.data)
+      this.applyToolCallsToResponse(body, transformed)
+
+      return {
+        success: true,
+        status: response.response.status,
+        headers: this.extractHeaders(response.response.headers),
+        body,
+        skipTransform: true,
+        latency,
+      }
+    } catch (error) {
+      const latency = Date.now() - startTime
       return {
         success: false,
         error: error instanceof Error ? error.message : 'Unknown error',

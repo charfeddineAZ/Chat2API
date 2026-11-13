@@ -6,13 +6,24 @@ import { Button } from '@/components/ui/button'
 import { Badge } from '@/components/ui/badge'
 import { Slider } from '@/components/ui/slider'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
+import { Switch } from '@/components/ui/switch'
 import { useProxyStore, type AccountWeight } from '@/stores/proxyStore'
 import { useToast } from '@/hooks/use-toast'
 import type { LoadBalanceStrategy, Account, Provider } from '@/types/electron'
-import { Scale, RefreshCw, Info } from 'lucide-react'
+import { Scale, RefreshCw, Info, ArrowUp, ArrowDown, Power } from 'lucide-react'
 
 interface LoadBalanceConfigProps {
   onConfigChange?: () => void
+}
+
+const DEFAULT_SELECTION_CONFIG = {
+  defaultWeight: 100,
+  cooldownEnabled: true,
+  cooldownMs: 30000,
+  failoverThreshold: 3,
+  recoveryMinutes: 1,
+  skipDailyLimit: true,
+  preferHealthyFirst: true,
 }
 
 export function LoadBalanceConfig({ onConfigChange }: LoadBalanceConfigProps) {
@@ -22,16 +33,19 @@ export function LoadBalanceConfig({ onConfigChange }: LoadBalanceConfigProps) {
     setLoadBalanceStrategy,
     accountWeights,
     setAccountWeights,
+    appConfig,
     saveAppConfig,
     isLoading,
   } = useProxyStore()
   const { toast } = useToast()
-  
+
   const initialStrategyRef = useRef<LoadBalanceStrategy>(loadBalanceStrategy)
   const initialWeightsRef = useRef<AccountWeight[]>(accountWeights)
-  
+  const initialSelectionConfigRef = useRef(appConfig?.accountSelectionConfig ?? DEFAULT_SELECTION_CONFIG)
+
   const [selectedStrategy, setSelectedStrategy] = useState<LoadBalanceStrategy>(loadBalanceStrategy)
   const [weights, setWeights] = useState<AccountWeight[]>(accountWeights)
+  const [selectionConfig, setSelectionConfig] = useState(appConfig?.accountSelectionConfig ?? DEFAULT_SELECTION_CONFIG)
   const [accounts, setAccounts] = useState<(Account & { provider?: Provider })[]>([])
   const [hasChanges, setHasChanges] = useState(false)
 
@@ -40,38 +54,47 @@ export function LoadBalanceConfig({ onConfigChange }: LoadBalanceConfigProps) {
   }, [])
 
   useEffect(() => {
+    const nextConfig = appConfig?.accountSelectionConfig ?? DEFAULT_SELECTION_CONFIG
     setSelectedStrategy(loadBalanceStrategy)
     setWeights(accountWeights)
+    setSelectionConfig(nextConfig)
     initialStrategyRef.current = loadBalanceStrategy
     initialWeightsRef.current = accountWeights
-  }, [])
+    initialSelectionConfigRef.current = nextConfig
+  }, [appConfig, loadBalanceStrategy, accountWeights])
 
   const fetchAccounts = async () => {
     try {
       const allAccounts = await window.electronAPI.accounts.getAll()
       const providers = await window.electronAPI.providers.getAll()
-      
+
       const accountsWithProvider = allAccounts.map(account => ({
         ...account,
         provider: providers.find(p => p.id === account.providerId),
       }))
-      
+
       setAccounts(accountsWithProvider)
-      
+
       const defaultWeights = accountsWithProvider.map(account => ({
         accountId: account.id,
-        weight: 100,
+        weight: selectionConfig.defaultWeight || 100,
       }))
-      
+
       const mergedWeights = defaultWeights.map(dw => {
         const existing = accountWeights.find(w => w.accountId === dw.accountId)
         return existing || dw
       })
-      
+
       setWeights(mergedWeights)
     } catch (error) {
       console.error(t('proxy.failedToGetAccounts'), error)
     }
+  }
+
+  const updateSelectionConfig = <K extends keyof typeof DEFAULT_SELECTION_CONFIG>(key: K, value: (typeof DEFAULT_SELECTION_CONFIG)[K]) => {
+    setSelectionConfig(prev => ({ ...prev, [key]: value }))
+    setHasChanges(true)
+    onConfigChange?.()
   }
 
   const handleStrategyChange = (value: LoadBalanceStrategy) => {
@@ -91,9 +114,11 @@ export function LoadBalanceConfig({ onConfigChange }: LoadBalanceConfigProps) {
   const handleSave = async () => {
     setLoadBalanceStrategy(selectedStrategy)
     setAccountWeights(weights)
-    
+
     const success = await saveAppConfig({
       loadBalanceStrategy: selectedStrategy,
+      accountWeights: weights,
+      accountSelectionConfig: selectionConfig,
     })
 
     if (success) {
@@ -114,10 +139,44 @@ export function LoadBalanceConfig({ onConfigChange }: LoadBalanceConfigProps) {
   const handleReset = () => {
     setSelectedStrategy(initialStrategyRef.current)
     setWeights(initialWeightsRef.current)
+    setSelectionConfig(initialSelectionConfigRef.current)
     setHasChanges(false)
   }
 
-  const activeAccounts = accounts.filter(a => a.status === 'active')
+  const activeAccounts = accounts
+    .filter(a => a.status === 'active')
+    .sort((a, b) => (a.rotationOrder ?? 0) - (b.rotationOrder ?? 0))
+
+  const moveAccountInRotation = async (accountId: string, direction: 'up' | 'down') => {
+    const ordered = [...activeAccounts].sort((a, b) => (a.rotationOrder ?? 0) - (b.rotationOrder ?? 0))
+    const index = ordered.findIndex(account => account.id === accountId)
+    if (index === -1) return
+
+    const targetIndex = direction === 'up' ? index - 1 : index + 1
+    if (targetIndex < 0 || targetIndex >= ordered.length) return
+
+    const reordered = [...ordered]
+    const [entry] = reordered.splice(index, 1)
+    reordered.splice(targetIndex, 0, entry)
+
+    const updates = reordered.map((account, position) => ({
+      id: account.id,
+      rotationOrder: position + 1,
+    }))
+
+    await Promise.all(
+      updates.map(async ({ id, rotationOrder }) => {
+        await window.electronAPI.accounts.update(id, { rotationOrder })
+      })
+    )
+
+    await fetchAccounts()
+  }
+
+  const toggleAccountStatus = async (accountId: string, nextStatus: 'active' | 'inactive') => {
+    await window.electronAPI.accounts.update(accountId, { status: nextStatus })
+    await fetchAccounts()
+  }
 
   const getStrategyLabel = (strategy: LoadBalanceStrategy): string => {
     const labels: Record<LoadBalanceStrategy, string> = {
@@ -143,7 +202,7 @@ export function LoadBalanceConfig({ onConfigChange }: LoadBalanceConfigProps) {
         <div className="flex items-center justify-between">
           <div className="flex items-center gap-2">
             <Scale className="h-5 w-5 text-primary" />
-            <CardTitle>{t('proxy.loadBalanceConfig')}</CardTitle>
+            <CardTitle>{t('proxy.accountRotation')}</CardTitle>
           </div>
           {hasChanges && (
             <Badge variant="secondary" className="text-xs">
@@ -151,7 +210,7 @@ export function LoadBalanceConfig({ onConfigChange }: LoadBalanceConfigProps) {
             </Badge>
           )}
         </div>
-        <CardDescription>{t('proxy.loadBalanceConfigDesc')}</CardDescription>
+        <CardDescription>{t('proxy.accountRotationDesc')}</CardDescription>
       </CardHeader>
       <CardContent className="space-y-6">
         <div className="space-y-2">
@@ -176,6 +235,86 @@ export function LoadBalanceConfig({ onConfigChange }: LoadBalanceConfigProps) {
           </div>
         </div>
 
+        <div className="grid gap-4 md:grid-cols-2 border rounded-xl p-4">
+          <div className="space-y-2">
+            <Label htmlFor="defaultWeight">{t('proxy.defaultWeight')}</Label>
+            <input
+              id="defaultWeight"
+              type="number"
+              min={1}
+              max={1000}
+              value={selectionConfig.defaultWeight}
+              onChange={(e) => updateSelectionConfig('defaultWeight', Number(e.target.value) || 1)}
+              className="w-full rounded-md border bg-background px-3 py-2 text-sm"
+            />
+          </div>
+
+          <div className="space-y-2">
+            <Label htmlFor="cooldownMs">{t('proxy.cooldownMs')}</Label>
+            <input
+              id="cooldownMs"
+              type="number"
+              min={0}
+              step={1000}
+              value={selectionConfig.cooldownMs}
+              onChange={(e) => updateSelectionConfig('cooldownMs', Number(e.target.value) || 0)}
+              className="w-full rounded-md border bg-background px-3 py-2 text-sm"
+            />
+          </div>
+
+          <div className="space-y-2">
+            <Label htmlFor="failoverThreshold">{t('proxy.failoverThreshold')}</Label>
+            <input
+              id="failoverThreshold"
+              type="number"
+              min={1}
+              max={20}
+              value={selectionConfig.failoverThreshold}
+              onChange={(e) => updateSelectionConfig('failoverThreshold', Number(e.target.value) || 1)}
+              className="w-full rounded-md border bg-background px-3 py-2 text-sm"
+            />
+          </div>
+
+          <div className="space-y-2">
+            <Label htmlFor="recoveryMinutes">{t('proxy.recoveryMinutes')}</Label>
+            <input
+              id="recoveryMinutes"
+              type="number"
+              min={1}
+              max={120}
+              value={selectionConfig.recoveryMinutes}
+              onChange={(e) => updateSelectionConfig('recoveryMinutes', Number(e.target.value) || 1)}
+              className="w-full rounded-md border bg-background px-3 py-2 text-sm"
+            />
+          </div>
+        </div>
+
+        <div className="space-y-4 border rounded-xl p-4">
+          <div className="flex items-center justify-between gap-3">
+            <div>
+              <Label>{t('proxy.cooldownEnabled')}</Label>
+              <p className="text-xs text-muted-foreground">{t('proxy.cooldownEnabledDesc')}</p>
+            </div>
+            <Switch checked={selectionConfig.cooldownEnabled} onCheckedChange={(checked) => updateSelectionConfig('cooldownEnabled', checked)} />
+          </div>
+
+          <div className="flex items-center justify-between gap-3">
+            <div>
+              <Label>{t('proxy.skipDailyLimit')}</Label>
+              <p className="text-xs text-muted-foreground">{t('proxy.skipDailyLimitDesc')}</p>
+            </div>
+            <Switch checked={selectionConfig.skipDailyLimit} onCheckedChange={(checked) => updateSelectionConfig('skipDailyLimit', checked)} />
+          </div>
+
+          <div className="flex items-center justify-between gap-3">
+            <div>
+              <Label>{t('proxy.preferHealthyFirst')}</Label>
+              <p className="text-xs text-muted-foreground">{t('proxy.preferHealthyFirstDesc')}</p>
+            </div>
+            <Switch checked={selectionConfig.preferHealthyFirst} onCheckedChange={(checked) => updateSelectionConfig('preferHealthyFirst', checked)} />
+          </div>
+        </div>
+
         {activeAccounts.length > 0 && (
           <div className="space-y-4 pt-4 border-t">
             <div className="flex items-center justify-between">
@@ -190,24 +329,53 @@ export function LoadBalanceConfig({ onConfigChange }: LoadBalanceConfigProps) {
                 {t('common.refresh')}
               </Button>
             </div>
-            
+
             <div className="space-y-4">
               {activeAccounts.map(account => {
-                const weight = weights.find(w => w.accountId === account.id)?.weight || 100
+                const weight = weights.find(w => w.accountId === account.id)?.weight || selectionConfig.defaultWeight || 100
                 return (
                   <div key={account.id} className="space-y-2">
-                    <div className="flex items-center justify-between">
-                      <div className="flex items-center gap-2">
-                        <span className="text-sm font-medium">{account.name}</span>
+                    <div className="flex items-center justify-between gap-2">
+                      <div className="flex items-center gap-2 min-w-0">
+                        <span className="text-sm font-medium truncate">{account.name}</span>
                         {account.provider && (
                           <Badge variant="outline" className="text-xs">
                             {account.provider.name}
                           </Badge>
                         )}
                       </div>
-                      <span className="text-sm text-muted-foreground w-12 text-right">
-                        {weight}%
-                      </span>
+                      <div className="flex items-center gap-2 shrink-0">
+                        <Button
+                          variant="ghost"
+                          size="icon"
+                          className="h-7 w-7"
+                          onClick={() => moveAccountInRotation(account.id, 'up')}
+                          disabled={activeAccounts.findIndex(item => item.id === account.id) === 0}
+                        >
+                          <ArrowUp className="h-4 w-4" />
+                        </Button>
+                        <Button
+                          variant="ghost"
+                          size="icon"
+                          className="h-7 w-7"
+                          onClick={() => moveAccountInRotation(account.id, 'down')}
+                          disabled={activeAccounts.findIndex(item => item.id === account.id) === activeAccounts.length - 1}
+                        >
+                          <ArrowDown className="h-4 w-4" />
+                        </Button>
+                        <Button
+                          variant={account.status === 'active' ? 'secondary' : 'outline'}
+                          size="sm"
+                          className="h-7 px-2"
+                          onClick={() => toggleAccountStatus(account.id, account.status === 'active' ? 'inactive' : 'active')}
+                        >
+                          <Power className="h-3.5 w-3.5 mr-1" />
+                          {account.status === 'active' ? t('common.disable') || 'Disable' : t('common.enable') || 'Enable'}
+                        </Button>
+                        <span className="text-sm text-muted-foreground w-12 text-right">
+                          {weight}%
+                        </span>
+                      </div>
                     </div>
                     <Slider
                       value={[weight]}
@@ -220,7 +388,7 @@ export function LoadBalanceConfig({ onConfigChange }: LoadBalanceConfigProps) {
                 )
               })}
             </div>
-            
+
             <p className="text-xs text-muted-foreground">
               {t('proxy.weightHelp')}
             </p>

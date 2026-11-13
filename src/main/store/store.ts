@@ -249,6 +249,10 @@ class StoreManager {
 
     return {
       ...rawConfig,
+      accountSelectionConfig: {
+        ...DEFAULT_CONFIG.accountSelectionConfig,
+        ...(config.accountSelectionConfig || {}),
+      },
       modelMappings: normalizeModelMappingsWithDefaults(rawConfig.modelMappings),
       defaultModelMappingsSeeded: config.defaultModelMappingsSeeded,
       requestLogConfig: normalizeRequestLogConfig(

@@ -5,7 +5,7 @@ export type ProviderStatus = 'online' | 'offline' | 'unknown'
 export type ProviderType = 'builtin' | 'custom'
 
 // Provider vendor type (for OAuth adapters)
-export type ProviderVendor = 'deepseek' | 'glm' | 'kimi' | 'mimo' | 'minimax' | 'qwen' | 'qwen-ai' | 'zai' | 'perplexity' | 'custom'
+export type ProviderVendor = 'deepseek' | 'glm' | 'kimi' | 'mimo' | 'minimax' | 'qwen' | 'qwen-ai' | 'zai' | 'perplexity' | 'openai' | 'anthropic' | 'custom'
 
 export type AuthType = 
   | 'oauth' 
@@ -26,7 +26,7 @@ export interface CredentialField {
   helpText?: string
 }
 
-export type LoadBalanceStrategy = 'round-robin' | 'fill-first' | 'failover'
+export type LoadBalanceStrategy = 'round-robin' | 'weighted-round-robin' | 'fill-first' | 'least-latency' | 'least-used' | 'failover'
 
 export type Theme = 'light' | 'dark' | 'system'
 
@@ -49,6 +49,24 @@ export interface Account {
   requestCount?: number
   dailyLimit?: number
   todayUsed?: number
+  rotationOrder?: number
+  lastLatencyMs?: number
+  avgLatencyMs?: number
+}
+
+export interface AccountWeight {
+  accountId: string
+  weight: number
+}
+
+export interface AccountSelectionConfig {
+  defaultWeight: number
+  cooldownEnabled: boolean
+  cooldownMs: number
+  failoverThreshold: number
+  recoveryMinutes: number
+  skipDailyLimit: boolean
+  preferHealthyFirst: boolean
 }
 
 export interface Provider {
@@ -92,6 +110,8 @@ export interface AppConfig {
   proxyPort: number
   proxyHost: string
   loadBalanceStrategy: LoadBalanceStrategy
+  accountWeights: AccountWeight[]
+  accountSelectionConfig: AccountSelectionConfig
   modelMappings: Record<string, ModelMapping>
   theme: Theme
   autoStart: boolean

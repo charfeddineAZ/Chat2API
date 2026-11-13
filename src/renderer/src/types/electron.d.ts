@@ -22,6 +22,7 @@ import type {
   ToolCallingConfig,
   LegacyToolPromptConfig,
   EffectiveModel,
+  AccountSelectionConfig,
 } from '../../../shared/types'
 
 export type { 
@@ -48,6 +49,7 @@ export type {
   ToolCallingConfig,
   LegacyToolPromptConfig,
   EffectiveModel,
+  AccountSelectionConfig,
 }
 
 export interface CustomProviderFormData {

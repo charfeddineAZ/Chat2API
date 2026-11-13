@@ -5,6 +5,7 @@
 
 export { BaseOAuthAdapter } from './base'
 export { DeepSeekAdapter } from './deepseek'
+export { GenericTokenAdapter } from './genericToken'
 export { GLMAdapter } from './glm'
 export { KimiAdapter } from './kimi'
 export { MimoAdapter } from './mimo'
@@ -15,6 +16,7 @@ export { QwenAiAdapter } from './qwen-ai'
 export { ZaiAdapter } from './zai'
 import { BaseOAuthAdapter } from './base'
 import { DeepSeekAdapter } from './deepseek'
+import { GenericTokenAdapter } from './genericToken'
 import { GLMAdapter } from './glm'
 import { KimiAdapter } from './kimi'
 import { MimoAdapter } from './mimo'
@@ -43,6 +45,9 @@ export function createAdapter(
       return new MimoAdapter(config)
     case 'minimax':
       return new MiniMaxAdapter(config)
+    case 'openai':
+    case 'anthropic':
+      return new GenericTokenAdapter(config)
     case 'perplexity':
       return new PerplexityAdapter(config)
     case 'qwen':
@@ -70,6 +75,9 @@ export function getSupportedAuthMethods(providerType: ProviderType): string[] {
     case 'mimo':
       return ['manual', 'cookie']
     case 'minimax':
+      return ['manual']
+    case 'openai':
+    case 'anthropic':
       return ['manual']
     case 'perplexity':
       return ['manual', 'cookie']

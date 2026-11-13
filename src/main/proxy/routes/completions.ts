@@ -152,6 +152,10 @@ router.post('/completions', async (ctx: Context) => {
     if (!result.success) {
       proxyStatusManager.recordRequestFailure(latency)
 
+      if (result.status && result.status >= 400 && result.status !== 429) {
+        loadBalancer.markAccountFailed(account.id)
+      }
+
       ctx.status = result.status || 500
       ctx.body = {
         error: {
@@ -162,12 +166,21 @@ router.post('/completions', async (ctx: Context) => {
       return
     }
 
+    loadBalancer.clearAccountFailure(account.id)
     proxyStatusManager.recordRequestSuccess(latency)
+
+    const previousRequestCount = account.requestCount || 0
+    const previousAvgLatency = account.avgLatencyMs ?? account.lastLatencyMs ?? latency
+    const nextAvgLatency = previousRequestCount === 0
+      ? latency
+      : Math.round(((previousAvgLatency * previousRequestCount) + latency) / (previousRequestCount + 1))
 
     storeManager.updateAccount(account.id, {
       lastUsed: Date.now(),
-      requestCount: (account.requestCount || 0) + 1,
+      requestCount: previousRequestCount + 1,
       todayUsed: (account.todayUsed || 0) + 1,
+      lastLatencyMs: latency,
+      avgLatencyMs: nextAvgLatency,
     })
 
     storeManager.addLog('debug', `Request succeeded`, {

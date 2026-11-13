@@ -18,6 +18,11 @@ export type AccountStatus = 'active' | 'inactive' | 'expired' | 'error'
 export type ProviderType = 'builtin' | 'custom'
 
 /**
+ * Provider vendor type
+ */
+export type ProviderVendor = 'deepseek' | 'glm' | 'kimi' | 'mimo' | 'minimax' | 'qwen' | 'qwen-ai' | 'zai' | 'perplexity' | 'openai' | 'anthropic' | 'custom'
+
+/**
  * Authentication Type Enum
  * - oauth: OAuth authentication
  * - token: Simple Token authentication
@@ -77,7 +82,7 @@ export interface BuiltinProviderConfig extends Omit<Provider, 'createdAt' | 'upd
 /**
  * Load Balance Strategy Enum
  */
-export type LoadBalanceStrategy = 'round-robin' | 'fill-first' | 'failover'
+export type LoadBalanceStrategy = 'round-robin' | 'weighted-round-robin' | 'fill-first' | 'least-latency' | 'least-used' | 'failover'
 
 /**
  * Theme Enum
@@ -115,6 +120,27 @@ export interface Account {
   dailyLimit?: number
   /** Today used count */
   todayUsed?: number
+  /** Rotation priority used by round-robin selection */
+  rotationOrder?: number
+  /** Last request latency in milliseconds */
+  lastLatencyMs?: number
+  /** Average request latency in milliseconds */
+  avgLatencyMs?: number
+}
+
+export interface AccountWeight {
+  accountId: string
+  weight: number
+}
+
+export interface AccountSelectionConfig {
+  defaultWeight: number
+  cooldownEnabled: boolean
+  cooldownMs: number
+  failoverThreshold: number
+  recoveryMinutes: number
+  skipDailyLimit: boolean
+  preferHealthyFirst: boolean
 }
 
 /**
@@ -181,6 +207,10 @@ export interface AppConfig {
   proxyHost: string
   /** Load balance strategy */
   loadBalanceStrategy: LoadBalanceStrategy
+  /** Account selection weights */
+  accountWeights: AccountWeight[]
+  /** Advanced account selection behavior */
+  accountSelectionConfig: AccountSelectionConfig
   /** Model mapping configuration */
   modelMappings: Record<string, ModelMapping>
   /** Default model mappings have been seeded into editable config */
@@ -796,6 +826,16 @@ export const DEFAULT_CONFIG: AppConfig = {
   proxyPort: 8080,
   proxyHost: '127.0.0.1',
   loadBalanceStrategy: 'round-robin',
+  accountWeights: [],
+  accountSelectionConfig: {
+    defaultWeight: 100,
+    cooldownEnabled: true,
+    cooldownMs: 30000,
+    failoverThreshold: 3,
+    recoveryMinutes: 1,
+    skipDailyLimit: true,
+    preferHealthyFirst: true,
+  },
   modelMappings: createDefaultModelMappings(),
   defaultModelMappingsSeeded: true,
   theme: 'system',

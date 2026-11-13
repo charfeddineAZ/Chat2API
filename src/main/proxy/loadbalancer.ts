@@ -3,7 +3,7 @@
  * Implements Round Robin and Fill First strategies
  */
 
-import { Account, Provider, LoadBalanceStrategy } from '../store/types'
+import { Account, Provider, LoadBalanceStrategy, DEFAULT_CONFIG } from '../store/types'
 import { AccountSelection } from './types'
 import { storeManager } from '../store/store'
 
@@ -13,8 +13,19 @@ import { storeManager } from '../store/store'
 export class LoadBalancer {
   private roundRobinIndex: Map<string, number> = new Map()
   private failedAccounts: Map<string, { count: number; lastFailTime: number }> = new Map()
-  private static readonly FAIL_THRESHOLD = 3
-  private static readonly RECOVERY_TIME = 60000 // 1 minute
+  private static readonly DEFAULT_FAIL_THRESHOLD = 3
+  private static readonly DEFAULT_RECOVERY_TIME = 60000 // 1 minute
+
+  private getFailThreshold(): number {
+    const config = storeManager.getConfig()
+    return Math.max(1, config.accountSelectionConfig?.failoverThreshold ?? LoadBalancer.DEFAULT_FAIL_THRESHOLD)
+  }
+
+  private getRecoveryTimeMs(): number {
+    const config = storeManager.getConfig()
+    const minutes = config.accountSelectionConfig?.recoveryMinutes ?? 1
+    return Math.max(30000, minutes * 60 * 1000)
+  }
 
   /**
    * Mark account as failed
@@ -41,12 +52,12 @@ export class LoadBalancer {
     const failure = this.failedAccounts.get(accountId)
     if (!failure) return false
 
-    if (Date.now() - failure.lastFailTime > LoadBalancer.RECOVERY_TIME) {
+    if (Date.now() - failure.lastFailTime > this.getRecoveryTimeMs()) {
       this.failedAccounts.delete(accountId)
       return false
     }
 
-    return failure.count >= LoadBalancer.FAIL_THRESHOLD
+    return failure.count >= this.getFailThreshold()
   }
 
   /**
@@ -75,8 +86,20 @@ export class LoadBalancer {
       }
     }
 
+    if (strategy === 'weighted-round-robin') {
+      return this.selectWeightedRoundRobin(candidates)
+    }
+
     if (strategy === 'fill-first') {
       return this.selectFillFirst(candidates)
+    }
+
+    if (strategy === 'least-latency') {
+      return this.selectLeastLatency(candidates)
+    }
+
+    if (strategy === 'least-used') {
+      return this.selectLeastUsed(candidates)
     }
 
     if (strategy === 'failover') {
@@ -109,6 +132,7 @@ export class LoadBalancer {
       const accounts = storeManager.getAccountsByProviderId(provider.id, true)
         .filter(account => this.isAccountAvailable(account))
         .filter(account => !excludeFailed || !this.isAccountInFailure(account.id))
+        .sort((a, b) => (a.rotationOrder ?? 0) - (b.rotationOrder ?? 0))
 
       console.log(`[LoadBalancer] Provider ${provider.name} (${provider.id}) has ${accounts.length} available accounts`)
 
@@ -186,7 +210,17 @@ export class LoadBalancer {
       return false
     }
 
-    if (account.dailyLimit && account.todayUsed && account.todayUsed >= account.dailyLimit) {
+    const config = storeManager.getConfig()
+    const selectionConfig = config.accountSelectionConfig || DEFAULT_CONFIG.accountSelectionConfig
+
+    if (selectionConfig.cooldownEnabled && account.lastUsed) {
+      const cooldownMs = Math.max(0, selectionConfig.cooldownMs || 30000)
+      if (Date.now() - account.lastUsed < cooldownMs) {
+        return false
+      }
+    }
+
+    if (selectionConfig.skipDailyLimit && account.dailyLimit && (account.todayUsed || 0) >= account.dailyLimit) {
       return false
     }
 
@@ -232,18 +266,74 @@ export class LoadBalancer {
   }
 
   /**
-   * Round Robin strategy
+   * Round Robin strategy with weighted selection support.
+   * Higher weight accounts are chosen more often while preserving sequence ordering.
    */
   private selectRoundRobin(candidates: AccountSelection[]): AccountSelection {
     const providerIds = [...new Set(candidates.map(c => c.provider.id))]
     const key = providerIds.join(',')
 
     const currentIndex = this.roundRobinIndex.get(key) || 0
-    const selected = candidates[currentIndex % candidates.length]
+    const weights = candidates.map((candidate) => this.getAccountWeight(candidate.account.id))
+    const totalWeight = weights.reduce((sum, weight) => sum + weight, 0)
 
-    this.roundRobinIndex.set(key, (currentIndex + 1) % candidates.length)
+    if (totalWeight <= 0 || candidates.length === 0) {
+      const selected = candidates[currentIndex % candidates.length]
+      this.roundRobinIndex.set(key, (currentIndex + 1) % Math.max(candidates.length, 1))
+      return selected
+    }
 
+    let target = currentIndex % totalWeight
+    let selected = candidates[0]
+
+    for (let i = 0; i < candidates.length; i++) {
+      const weight = weights[i]
+      if (target < weight) {
+        selected = candidates[i]
+        break
+      }
+      target -= weight
+    }
+
+    this.roundRobinIndex.set(key, (currentIndex + 1) % totalWeight)
     return selected
+  }
+
+  /**
+   * Returns the configured weight for an account, defaulting to 100 when unset.
+   */
+  private getAccountWeight(accountId: string): number {
+    const config = storeManager.getConfig()
+    const defaultWeight = Number(config.accountSelectionConfig?.defaultWeight ?? DEFAULT_CONFIG.accountSelectionConfig.defaultWeight)
+    const entry = config.accountWeights?.find(weight => weight.accountId === accountId)
+    const weight = Number(entry?.weight ?? defaultWeight)
+    if (!Number.isFinite(weight) || weight <= 0) {
+      return defaultWeight > 0 ? defaultWeight : 100
+    }
+    return weight
+  }
+
+  private selectWeightedRoundRobin(candidates: AccountSelection[]): AccountSelection {
+    const totalWeight = candidates.reduce((sum, candidate) => sum + this.getAccountWeight(candidate.account.id), 0)
+    if (totalWeight <= 0) return this.selectRoundRobin(candidates)
+
+    const providerIds = [...new Set(candidates.map(c => c.provider.id))]
+    const key = `${providerIds.join(',')}:weighted`
+    const currentIndex = this.roundRobinIndex.get(key) || 0
+    let target = currentIndex % totalWeight
+
+    for (const candidate of candidates) {
+      const weight = this.getAccountWeight(candidate.account.id)
+      if (target < weight) {
+        this.roundRobinIndex.set(key, (currentIndex + 1) % totalWeight)
+        return candidate
+      }
+      target -= weight
+    }
+
+    const fallback = candidates[currentIndex % candidates.length]
+    this.roundRobinIndex.set(key, (currentIndex + 1) % totalWeight)
+    return fallback
   }
 
   /**
@@ -272,6 +362,26 @@ export class LoadBalancer {
     })
   }
 
+  private selectLeastLatency(candidates: AccountSelection[]): AccountSelection {
+    return candidates.reduce((best, current) => {
+      const bestLatency = best.account.lastLatencyMs ?? Number.MAX_SAFE_INTEGER
+      const currentLatency = current.account.lastLatencyMs ?? Number.MAX_SAFE_INTEGER
+      if (currentLatency < bestLatency) return current
+      if (currentLatency === bestLatency && (current.account.lastUsed ?? 0) < (best.account.lastUsed ?? 0)) return current
+      return best
+    })
+  }
+
+  private selectLeastUsed(candidates: AccountSelection[]): AccountSelection {
+    return candidates.reduce((best, current) => {
+      const bestUsed = best.account.todayUsed || 0
+      const currentUsed = current.account.todayUsed || 0
+      if (currentUsed < bestUsed) return current
+      if (currentUsed === bestUsed && (current.account.lastUsed ?? 0) < (best.account.lastUsed ?? 0)) return current
+      return best
+    })
+  }
+
   /**
    * Failover strategy
    * Select account with least failures, preferring healthy accounts
@@ -280,7 +390,7 @@ export class LoadBalancer {
     const healthyCandidates = candidates.filter(c => !this.isAccountInFailure(c.account.id))
     
     if (healthyCandidates.length > 0) {
-      return this.selectRoundRobin(healthyCandidates)
+      return this.selectWeightedRoundRobin(healthyCandidates)
     }
 
     const sortedCandidates = candidates.sort((a, b) => {

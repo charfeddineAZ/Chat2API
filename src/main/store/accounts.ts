@@ -68,6 +68,9 @@ export class AccountManager {
     }
     
     const now = Date.now()
+    const existingAccounts = storeManager.getAccountsByProviderId(data.providerId)
+    const maxRotationOrder = existingAccounts.reduce((max, account) => Math.max(max, account.rotationOrder ?? 0), 0)
+
     const account: Account = {
       id: storeManager.generateId(),
       providerId: data.providerId,
@@ -82,6 +85,7 @@ export class AccountManager {
       dailyLimit: data.dailyLimit,
       lastStatusCheck: now,
       lastUsed: now,
+      rotationOrder: maxRotationOrder + 1,
     }
     
     storeManager.addAccount(account)

@@ -1,8 +1,10 @@
+import anthropicConfig from './anthropic.ts'
 import deepseekConfig from './deepseek.ts'
 import glmConfig from './glm.ts'
 import kimiConfig from './kimi.ts'
 import minimaxConfig from './minimax.ts'
 import mimoConfig from './mimo.ts'
+import openaiConfig from './openai.ts'
 import perplexityConfig from './perplexity.ts'
 import qwenConfig from './qwen.ts'
 import qwenAiConfig from './qwen-ai.ts'
@@ -10,11 +12,13 @@ import zaiConfig from './zai.ts'
 import type { BuiltinProviderConfig } from '../../store/types.ts'
 
 export const builtinProviders: BuiltinProviderConfig[] = [
+  anthropicConfig,
   deepseekConfig,
   glmConfig,
   kimiConfig,
   minimaxConfig,
   mimoConfig,
+  openaiConfig,
   perplexityConfig,
   qwenConfig,
   qwenAiConfig,
@@ -22,11 +26,13 @@ export const builtinProviders: BuiltinProviderConfig[] = [
 ]
 
 export const builtinProviderMap: Record<string, BuiltinProviderConfig> = {
+  anthropic: anthropicConfig,
   deepseek: deepseekConfig,
   glm: glmConfig,
   kimi: kimiConfig,
   minimax: minimaxConfig,
   mimo: mimoConfig,
+  openai: openaiConfig,
   perplexity: perplexityConfig,
   qwen: qwenConfig,
   'qwen-ai': qwenAiConfig,
@@ -42,11 +48,13 @@ export function getBuiltinProviders(): BuiltinProviderConfig[] {
 }
 
 export {
+  anthropicConfig,
   deepseekConfig,
   glmConfig,
   kimiConfig,
   minimaxConfig,
   mimoConfig,
+  openaiConfig,
   perplexityConfig,
   qwenConfig,
   qwenAiConfig,

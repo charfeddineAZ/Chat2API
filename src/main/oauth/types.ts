@@ -130,6 +130,26 @@ export interface ManualTokenConfig {
  * Manual input config for each provider
  */
 export const MANUAL_TOKEN_CONFIGS: Record<ProviderType, ManualTokenConfig[]> = {
+  openai: [
+    {
+      providerType: 'openai',
+      tokenType: 'access',
+      label: 'OpenAI API Key',
+      placeholder: 'sk-...',
+      description: 'Create an API key in the OpenAI platform and paste it here.',
+      helpUrl: 'https://platform.openai.com/api-keys',
+    },
+  ],
+  anthropic: [
+    {
+      providerType: 'anthropic',
+      tokenType: 'access',
+      label: 'Anthropic API Key',
+      placeholder: 'sk-ant-...',
+      description: 'Create a Claude API key in the Anthropic Console and paste it here.',
+      helpUrl: 'https://console.anthropic.com/settings/keys',
+    },
+  ],
   deepseek: [
     {
       providerType: 'deepseek',
